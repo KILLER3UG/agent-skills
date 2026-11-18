@@ -55,6 +55,15 @@ python scripts/hermes_worker.py --set-provider "nous"
 python scripts/hermes_worker.py --set-orchestrator "Argon"
 ```
 
+### Multiple Workers
+
+Run different models side by side via per-call overrides; the persisted default stays
+untouched. Example second worker (verified 2026-11-18): `--provider mosi --model nex-n2.6`.
+Prerequisite: a custom provider like `mosi` must already exist under `providers:` in the
+user's Hermes `config.yaml` (name, `base_url`, credentials) — the skill never creates or
+edits it. List a provider's models with `hermes model` or its OpenAI-compatible `/v1/models`
+before dispatching.
+
 ---
 
 ## Prerequisites & Zero-Trial-and-Error Smoke Test
@@ -68,6 +77,10 @@ python scripts/hermes_worker.py --prompt "Reply with exactly: HERMES_OK" --safe-
 
 If `hermes` is missing from `PATH`, stop and ask the user to install/authenticate Hermes
 rather than guessing workarounds.
+
+**Cost note (measured 2026-11-18):** every worker turn carries ~14k input tokens of Hermes
+system prompt, tool schemas, and memory overhead even for a one-token reply. Use
+`--toolsets` or `--safe-mode` to trim pure-text slices, and keep briefs narrow.
 
 ---
 
@@ -83,7 +96,7 @@ rather than guessing workarounds.
 
    **Bash / macOS / Linux:**
    ```bash
-   python scripts/hermes_worker.py --in "/path/to/workspace" --session "worker-1" <<'EOF'
+   python scripts/hermes_worker.py --in "/path/to/workspace" --max-turns 20 --run-budget 600 <<'EOF'
    <self-contained worker brief>
    EOF
    ```
@@ -92,10 +105,12 @@ rather than guessing workarounds.
    ```powershell
    @'
    <self-contained worker brief>
-   '@ | python scripts/hermes_worker.py --in "C:\path\to\workspace" --session "worker-1"
+   '@ | python scripts/hermes_worker.py --in "C:\path\to\workspace" --max-turns 20 --run-budget 600
    ```
 
-   Every brief starts fresh unless resuming `--session`, so include:
+   Dispatch unnamed one-shots by default and record each returned `session_id` (see the
+   `--session` pitfall below). Every brief must be self-contained — workers have no
+   conversation context. Include:
    - Goal, files owned, and files read-only / off-limits
    - Project conventions and traps (quote them directly)
    - Exact verification commands to run before reporting done
@@ -105,8 +120,12 @@ rather than guessing workarounds.
    - `--worktree`: use **only** when `--in` points to a git repository and you are running
      parallel workers that might touch overlapping paths. Do not pass `--worktree` on non-git
      directories.
-   - `--session <name>`: maps to `-c <name> --create-if-missing` so review feedback goes back
-     to the same worker thread.
+   - `--session <name>`: maps to `-c <name> --create-if-missing`. **Verified failure
+     (2026-11-18):** combined with `-m`/`--provider`/`--max-turns` the gateway rejects the
+     run — "Resume retains gateway session policy; creation overrides are unsupported on
+     resume" — even for brand-new names. Use `--session` only to resume a thread launched
+     with the identical policy and without override flags; otherwise dispatch unnamed
+     one-shots and carry context forward in the next brief.
    - `--source tool`: applied automatically so automated worker runs stay out of the user's
      interactive session list.
    - `--max-turns <N>` / `--run-budget <SECONDS>`: cap runaway iterations or wall-clock time.
@@ -119,7 +138,8 @@ rather than guessing workarounds.
    - Read modified files and `git diff` yourself.
    - Re-run all test/lint/build gates yourself in the workspace or worker worktree; never
      accept a pass claim without observed output.
-   - Send concrete fixes back to the same `--session` rather than spawning a blank worker.
+   - Send concrete fixes as a new self-contained brief (quote the worker's diff and the
+     failing gate output); resume via `--session` only under the identical-policy rule above.
 5. **Land and report.**
    - Merge any `--worktree` branches into the main working copy per repo rules (never push
      unless asked).
